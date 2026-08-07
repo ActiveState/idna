@@ -3,6 +3,18 @@
 History
 -------
 
+2.10.post1 (2026-08-06)
++++++++++++++++++++++++
+
+- ActiveState security release. Fix CVE-2024-3651 (GHSA-jjg7-2v4v-x38h):
+  specially crafted input to idna.encode() could consume an exceptional
+  amount of CPU because the joining-type scan in valid_contextj() was
+  quadratic in the label length. Labels containing a Non_Joining codepoint
+  between a joiner and its context were also wrongly accepted, contrary to
+  RFC 5892 Appendix A.1. Backported from upstream idna 3.7; the
+  joining_types table is regenerated from Unicode 13.0.0
+  extracted/DerivedJoiningType.txt.
+
 2.10 (2020-06-27)
 +++++++++++++++++
 

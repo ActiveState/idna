@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
+import time
 import unittest
 
 import idna
+from idna import idnadata
 
 
 class IDNATests(unittest.TestCase):
@@ -176,6 +178,57 @@ class IDNATests(unittest.TestCase):
         self.assertFalse(idna.valid_contextj(zwj, 0))
         self.assertFalse(idna.valid_contextj(latin + zwj, 1)) # No preceding Virama
         self.assertTrue(idna.valid_contextj(virama + zwj, 1)) # Preceding Virama
+
+    def test_valid_contextj_joining_type_scan(self):
+
+        # CVE-2024-3651.  RFC 5892 Appendix A.1 requires a ZWNJ to match
+        #   (Joining_Type:{L,D})(Joining_Type:T)*ZWNJ(Joining_Type:T)*(Joining_Type:{R,D})
+        # so the scan either side of the joiner must stop at the first codepoint
+        # whose joining type is neither Transparent nor a valid terminator.
+
+        zwnj = u'\u200c'
+        beh = u'\u0628'    # ARABIC LETTER BEH, Joining_Type=D
+        hamza = u'\u0621'  # ARABIC LETTER HAMZA, Joining_Type=U (Non_Joining)
+        fatha = u'\u064e'  # ARABIC FATHA, Joining_Type=T (Transparent)
+
+        # A Transparent codepoint between the joiner and its context is skipped.
+        self.assertTrue(idna.valid_contextj(beh + fatha + zwnj + fatha + beh, 2))
+
+        # A Non_Joining codepoint terminates the scan, so the label is invalid.
+        self.assertFalse(idna.valid_contextj(beh + hamza + zwnj + beh, 2))
+        self.assertFalse(idna.valid_contextj(beh + zwnj + hamza + beh, 1))
+
+        # Codepoints absent from the joining_types table default to Non_Joining
+        # and must terminate the scan the same way.
+        latin_a = u'a'
+        self.assertIsNone(idnadata.joining_types.get(ord(latin_a)))
+        self.assertFalse(idna.valid_contextj(beh + latin_a + zwnj + beh, 2))
+
+    def test_valid_contextj_is_not_quadratic(self):
+
+        # CVE-2024-3651.  Before the fix the scan fell through on unknown and
+        # Non_Joining codepoints instead of stopping, so a label of n joiners
+        # cost O(n^2) and idna.encode() could be stalled with a short string.
+        # Guard against the regression by comparing growth, not wall clock.
+
+        def elapsed(n):
+            label = u'\u0628' + (u'\u0621\u200c' * n) + u'\u0628'
+            start = time.time()
+            try:
+                idna.encode(label + u'.com')
+            except idna.IDNAError:
+                pass
+            return time.time() - start
+
+        small = elapsed(250)
+        large = elapsed(2000)
+
+        # An 8x longer label went from ~64x the work to ~8x at worst. Allow a
+        # very loose bound so the test is not flaky on a loaded machine, but
+        # still fails decisively on quadratic behaviour (which was ~50x here).
+        self.assertLess(large, max(small, 0.01) * 20,
+                        'valid_contextj scan appears quadratic: '
+                        '250 joiners took %.4fs, 2000 took %.4fs' % (small, large))
 
     def test_valid_contexto(self):
 
