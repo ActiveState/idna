@@ -10,8 +10,10 @@ History
   a bypass of the CVE-2024-3651 fix: labels dominated by CONTEXTO
   codepoints still drove label validation into quadratic time. encode(),
   decode() and check_label() now reject input longer than the maximum DNS
-  domain length before any per-codepoint validation. Backported from
-  upstream idna 3.14 and 3.15.
+  domain length before any per-codepoint validation, and every public
+  entry point (including uts46_remap(), alabel() and ulabel()) rejects
+  input longer than 1024 code points before doing any work. Backported
+  from upstream idna 3.14, 3.15 and 3.17.
 
 2.10.post1 (2026-08-06)
 +++++++++++++++++++++++
