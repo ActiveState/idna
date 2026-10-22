@@ -230,6 +230,65 @@ class IDNATests(unittest.TestCase):
                         'valid_contextj scan appears quadratic: '
                         '250 joiners took %.4fs, 2000 took %.4fs' % (small, large))
 
+    def test_oversized_input_rejected_promptly(self):
+
+        # CVE-2026-45409 (GHSA-65pc-fj4g-8rjx).  A bypass of the CVE-2024-3651
+        # fix: labels dominated by CONTEXTO codepoints drive valid_contexto()
+        # into quadratic time.  encode()/decode() must reject inputs longer than
+        # the maximum DNS domain length before per-codepoint validation runs.
+
+        payloads = (u'\u0660' * 8000, u'\u30fb' * 8000 + u'\u6f22')
+        for payload in payloads:
+            start = time.time()
+            self.assertRaises(idna.IDNAError, idna.encode, payload)
+            self.assertRaises(idna.IDNAError, idna.decode, payload)
+            self.assertRaises(idna.IDNAError, idna.encode, payload, uts46=True)
+            self.assertLess(time.time() - start, 1.0)
+
+    def test_oversized_label_rejected_promptly(self):
+
+        # CVE-2026-45409.  The whole-domain cap in encode()/decode() does not
+        # cover direct callers of alabel/ulabel/check_label, nor the incremental
+        # codec, which calls alabel/ulabel per label.
+
+        from idna.codec import IncrementalEncoder
+
+        payload = u'\u30fb' * 8000 + u'\u6f22'
+        start = time.time()
+        self.assertRaises(idna.IDNAError, idna.check_label, payload)
+        self.assertRaises(idna.IDNAError, idna.alabel, payload)
+        self.assertRaises(idna.IDNAError, idna.ulabel, payload)
+        self.assertRaises(idna.IDNAError, IncrementalEncoder().encode, payload, True)
+        self.assertLess(time.time() - start, 1.0)
+
+        # Labels up to the whole-domain bound still reach normal validation.
+        self.assertRaises(idna.IDNAError, idna.alabel, u'a' * 64)
+        self.assertEqual(idna.ulabel(u'a' * 64), u'a' * 64)
+
+    def test_oversized_input_rejected_before_remap(self):
+
+        # CVE-2026-45409 follow-up (upstream f90b87adc6, idna 3.17).  On
+        # Python 2 uts46_remap() is itself quadratic (unicode += has no
+        # in-place shortcut), and ulabel() decodes punycode before any length
+        # check, so the caps must run before either.
+
+        from idna.codec import IncrementalEncoder
+
+        long_domain = u'a' * 100000
+        long_alabel = b'xn--' + (u'\u00e9a' * 2000).encode('punycode')
+        start = time.time()
+        self.assertRaises(idna.IDNAError, idna.encode, long_domain, uts46=True)
+        self.assertRaises(idna.IDNAError, idna.decode, long_domain, uts46=True)
+        self.assertRaises(idna.IDNAError, idna.uts46_remap, long_domain)
+        self.assertRaises(idna.IDNAError, idna.ulabel, long_alabel)
+        self.assertRaises(idna.IDNAError, idna.alabel, long_alabel)
+        self.assertRaises(idna.IDNAError, IncrementalEncoder().encode, long_alabel.decode('ascii'), True)
+        for check in (idna.check_nfc, idna.check_bidi):
+            self.assertRaises(idna.IDNAError, check, long_domain)
+        for check in (idna.valid_contextj, idna.valid_contexto):
+            self.assertRaises(idna.IDNAError, check, long_domain, 0)
+        self.assertLess(time.time() - start, 1.0)
+
     def test_valid_contexto(self):
 
         latin = u'\u0061'

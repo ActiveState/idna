@@ -7,6 +7,10 @@ from .intranges import intranges_contain
 
 _virama_combining_class = 9
 _alabel_prefix = b'xn--'
+# Defensive upper bound on any input, roughly an order of magnitude above
+# legitimate inputs, checked before any work that is not linear in the
+# input length (CVE-2026-45409).
+_max_input_length = 1024
 _unicode_dots_re = re.compile(u'[\u002e\u3002\uff0e\uff61]')
 
 if sys.version_info[0] >= 3:
@@ -65,6 +69,8 @@ def valid_string_length(label, trailing_dot):
 
 
 def check_bidi(label, check_ltr=False):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     # Bidi rules should only be applied if string contains RTL characters
     bidi_label = False
@@ -141,12 +147,16 @@ def check_hyphen_ok(label):
 
 
 def check_nfc(label):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     if unicodedata.normalize('NFC', label) != label:
         raise IDNAError('Label must be in Normalization Form C')
 
 
 def valid_contextj(label, pos):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     cp_value = ord(label[pos])
 
@@ -195,6 +205,8 @@ def valid_contextj(label, pos):
 
 
 def valid_contexto(label, pos, exception=False):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     cp_value = ord(label[pos])
 
@@ -236,11 +248,26 @@ def valid_contexto(label, pos, exception=False):
 
 
 def check_label(label):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     if isinstance(label, (bytes, bytearray)):
         label = label.decode('utf-8')
     if len(label) == 0:
         raise IDNAError('Empty Label')
+    # Reject oversized labels before per-codepoint validation runs.
+    # CONTEXTJ/CONTEXTO checks scan the whole label per codepoint, so an
+    # uncapped label drives validation into quadratic time
+    # (CVE-2026-45409). encode()/decode() cap the whole-domain length;
+    # this cap protects direct callers of alabel/ulabel/check_label and
+    # the incremental codec. The whole-domain bound is used rather than
+    # the per-label DNS bound so that UTS #46 lenient decoding of labels
+    # longer than 63 characters is preserved.
+    # On narrow (UCS-2) Python 2 builds len() counts UTF-16 code units, so
+    # labels of astral-plane codepoints reach this bound at about half as
+    # many codepoints; such labels are far beyond any legitimate DNS name.
+    if not valid_string_length(label, trailing_dot=True):
+        raise IDNAError('Label too long')
 
     check_nfc(label)
     check_hyphen_ok(label)
@@ -268,6 +295,8 @@ def check_label(label):
 
 
 def alabel(label):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     try:
         label = label.encode('ascii')
@@ -293,6 +322,8 @@ def alabel(label):
 
 
 def ulabel(label):
+    if len(label) > _max_input_length:
+        raise IDNAError('Label too long')
 
     if not isinstance(label, (bytes, bytearray)):
         try:
@@ -319,6 +350,8 @@ def ulabel(label):
 
 def uts46_remap(domain, std3_rules=True, transitional=False):
     """Re-map the characters in the string according to UTS46 processing."""
+    if len(domain) > _max_input_length:
+        raise IDNAError('Domain too long')
     from .uts46data import uts46data
     output = u""
     try:
@@ -349,8 +382,14 @@ def encode(s, strict=False, uts46=False, std3_rules=False, transitional=False):
 
     if isinstance(s, (bytes, bytearray)):
         s = s.decode("ascii")
+    if len(s) > _max_input_length:
+        raise IDNAError('Domain too long')
     if uts46:
         s = uts46_remap(s, std3_rules, transitional)
+    # Reject inputs that exceed the maximum DNS domain length up-front
+    # to avoid expensive computation on long inputs (CVE-2026-45409).
+    if not valid_string_length(s, trailing_dot=True):
+        raise IDNAError('Domain too long')
     trailing_dot = False
     result = []
     if strict:
@@ -380,8 +419,14 @@ def decode(s, strict=False, uts46=False, std3_rules=False):
 
     if isinstance(s, (bytes, bytearray)):
         s = s.decode("ascii")
+    if len(s) > _max_input_length:
+        raise IDNAError('Domain too long')
     if uts46:
         s = uts46_remap(s, std3_rules, False)
+    # Reject inputs that exceed the maximum DNS domain length up-front
+    # to avoid expensive computation on long inputs (CVE-2026-45409).
+    if not valid_string_length(s, trailing_dot=True):
+        raise IDNAError('Domain too long')
     trailing_dot = False
     result = []
     if not strict:
